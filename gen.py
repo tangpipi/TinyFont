@@ -163,7 +163,11 @@ def build(font_path):
 
 def test(fonts):
     w, h = TestParams.width, TestParams.height
-    if len(TestParams.corpus): corpus = TestParams.corpus
+    in_order = False
+    if len(TestParams.corpus): 
+        corpus = TestParams.corpus
+        in_order = True
+        TestParams.nsample = len(corpus)
     else:
         try: corpus = open("teststrings.txt",'r',encoding='utf-8').readlines()[-1]
         except: corpus = "TheQuickBrownFoxJumpsOverTheLazyDog零一二三四五六七八九"
@@ -173,7 +177,10 @@ def test(fonts):
     randidx = random.randrange(0, max(1, len(corpus)//TestParams.nsample))
     
     for i in range(0, TestParams.nsample):
-        idx = (randidx*TestParams.nsample + i) % len(corpus)
+        if in_order:
+            idx = i
+        else:
+            idx = (randidx*TestParams.nsample + i) % len(corpus)
         ch = corpus[idx]
         print(ch, end=" ")
         sys.stdout.flush()
