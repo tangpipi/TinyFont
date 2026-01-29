@@ -97,11 +97,14 @@ class TyfPacker:
             
             block_start_ptr = current_abs_offset
             
-            # 生成段内的字形字节流
-            glyph_stream = bytearray()
+            # 准备数据容器
+            glyph_lengths = bytearray() # 对应规范 3.3.2 Length Table
+            glyph_stream = bytearray()  # 对应规范 3.3.3 Data Stream
+            
             for strokes in sec['glyphs']:
+                # 处理空字形 (None) 或 无笔画字形
                 if not strokes:
-                    glyph_stream.append(0)
+                    glyph_lengths.append(0)
                     continue
                 
                 glyph_data = bytearray()
@@ -112,15 +115,24 @@ class TyfPacker:
                         if i == 0: ix |= 0x80
                         glyph_data.append(ix); glyph_data.append(iy)
                 
+                # 计算点对数量 (ByteSize / 2)
                 point_count = min(255, len(glyph_data) // 2)
-                glyph_stream.append(point_count)
+                
+                # 修改点 1: 长度写入 Length Table，而不是 Stream
+                glyph_lengths.append(point_count)
+                
+                # 修改点 2: Stream 中只包含纯坐标数据
                 glyph_stream.extend(glyph_data[:point_count*2])
             
-            # 计算 Block Header 并拼接完整块
-            meta_off = (len(glyph_stream) + 4 + 3) // 4
+            # 组合完整 Block: Header + Length Table + Stream
+            # 计算 Meta Offset (规范: 相对于 Block Header 起始位置)
+            # 当前不支持 Meta Data，所以指向 Block 结尾
+            total_block_size = 4 + len(glyph_lengths) + len(glyph_stream)
+            meta_off = (total_block_size + 3) // 4
+            
             block_header = struct.pack('<bbH', 0, 0, meta_off)
             
-            full_block = block_header + glyph_stream
+            full_block = block_header + glyph_lengths + glyph_stream
             blocks_bin.extend(full_block)
             
             # 构建索引项
@@ -222,18 +234,24 @@ class TyfParser:
 
         blk_ptr = target_sec['ptr']
         local_idx = unicode_val - target_sec['start']
-        curr_glyph_ptr = blk_ptr + 4  # 跳过 Block Header
-
-        # 按长度跳过前面的字形条目（变长编码）
-        for i in range(local_idx):
-            glyph_len = self.data[curr_glyph_ptr]
-            curr_glyph_ptr += 1 + (glyph_len << 1)
-
-        target_len = self.data[curr_glyph_ptr]
+        
+        # 修改点 3: 根据规范定位各个区域
+        # Block Header (4 Bytes) -> Length Table (Count Bytes) -> Glyph Data Stream
+        len_table_start = blk_ptr + 4
+        stream_start = len_table_start + target_sec['count']
+        
+        # 直接查表获取目标字形长度 (Point Count)
+        target_len = self.data[len_table_start + local_idx]
         if target_len == 0:
             return []
 
-        raw_bytes = self.data[curr_glyph_ptr + 1: curr_glyph_ptr + 1 + (target_len << 1)]
+        # 修改点 4: 计算偏移量
+        # 偏移量 = 前面所有字形长度之和 * 2 (每个点2字节)
+        # 注意：这里在 Python 中使用切片求和，嵌入式 C 中通常通过遍历累加
+        preceding_points = sum(self.data[len_table_start : len_table_start + local_idx])
+        data_offset = stream_start + (preceding_points * 2)
+
+        raw_bytes = self.data[data_offset : data_offset + (target_len * 2)]
 
         strokes = []
         current_stroke = []

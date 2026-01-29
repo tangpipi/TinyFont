@@ -96,30 +96,48 @@ def analyze_tyf(filename):
 
         plane_map[plane_id]['sections'] += 1
         plane_map[plane_id]['slots'] += glyph_count
-        stats['length_table'] += glyph_count
+        stats['length_table'] += glyph_count  # 长度表大小 = glyph_count 字节
 
-        # 扫描当前块中的每个字形条目
-        curr_ptr = abs_offset + 4
+        # --- 修正点开始：按照新规范解析 Block ---
+        # 结构：BlockHeader(4) -> LengthTable(count) -> GlyphDataStream(...)
+        len_table_start = abs_offset + 4
+        stream_start = len_table_start + glyph_count
+        
+        current_data_offset = 0 # 记录在 Stream 中的相对偏移
+
         for j in range(glyph_count):
-            g_len = data[curr_ptr]
+            # 1. 从长度表读取长度 (1 Byte)
+            g_len = data[len_table_start + j]
+            
+            # 2. 转换为数据字节数 (PointCount * 2)
             data_bytes = g_len << 1
+            
             if g_len == 0:
-                stats['empty_slot_loss'] += 1
+                stats['empty_slot_loss'] += 1 # 长度表里占了1字节但无数据
             else:
                 plane_map[plane_id]['chars'] += 1
                 stats['pure_data'] += data_bytes
                 uni = start_uni + j
 
-                # 将 (unicode, 数据字节数) 添加至列表供优化器模拟使用
+                # 将 (unicode, 数据字节数) 添加至列表
                 all_chars_data.append((uni, data_bytes))
 
-                pts = data[curr_ptr+1 : curr_ptr+1+data_bytes]
+                # 3. 从数据流中提取坐标数据
+                # 绝对位置 = Stream起始 + 当前累加偏移
+                ptr_data = stream_start + current_data_offset
+                pts = data[ptr_data : ptr_data + data_bytes]
+                
+                # 统计笔画数 (Bit 7 set)
                 stk = sum(1 for k in range(0, len(pts), 2) if pts[k] & 0x80)
                 glyph_details.append({'bytes': data_bytes, 'pts': g_len, 'stk': stk})
-            curr_ptr += 1 + data_bytes
+                
+                # 累加数据流偏移
+                current_data_offset += data_bytes
 
-        # 更新本块结束位置指针
-        last_block_end = curr_ptr
+        # 更新本块结束位置指针 (Header + LenTable + DataStream)
+        curr_block_end = stream_start + current_data_offset
+        last_block_end = curr_block_end
+        # --- 修正点结束 ---
 
     # 统计文件末尾的多余填充（如果有）
     if file_size > last_block_end:
@@ -146,8 +164,8 @@ def analyze_tyf(filename):
 
         # 当前段已占用的槽位（包含空洞）
         curr_sec_slots = 1
-        # 当前块的长度（4B header + 1B len table + 数据）
-        # 注：索引区为 8 字节对齐，header 总长为 12 字节，因此第一个 block 起始对齐为 4 字节
+        # 当前块的长度
+        # Header(4) + LenTable(1) + Data(sz)
         curr_block_len = 4 + 1 + all_chars_data[0][1]
 
         for k in range(1, len(all_chars_data)):
@@ -169,7 +187,8 @@ def analyze_tyf(filename):
                 curr_sec_slots = 1
                 curr_block_len = 4 + 1 + curr_sz
             else:
-                # 继续当前段，累加空洞数与长度
+                # 继续当前段
+                # 增加 gap 个长度表空项(1B each) + 当前项长度表(1B) + 数据大小
                 sim_empty_slots += gap
                 curr_sec_slots += (gap + 1)
                 curr_block_len += gap + 1 + curr_sz
@@ -178,7 +197,10 @@ def analyze_tyf(filename):
         if curr_block_len % 4 != 0:
             sim_padding += (4 - (curr_block_len % 4))
 
-        # 总结构成本 = 全局 header(12B) * sections? 原代码按 (12 * sections) 近似计算索引+块头
+        # 总结构成本 = 全局 header(12B) + Index(8B*N) + BlockHeader(4B*N) + LengthTable(N + Gaps) + Padding
+        # 注：代码中 stats['index'] 单独计算了，这里 total_struct 主要评估随分段变化的开销
+        # Cost = (Header12 + Index8*N) + (BlockHeader4*N + LenTableBytes + Padding)
+        # LenTableBytes = count_of_chars + count_of_gaps
         total_struct = (sim_sections * 12) + (len(all_chars_data) + sim_empty_slots) + sim_padding
         return total_struct, sim_sections
 
@@ -263,4 +285,4 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(f"{Fore.YELLOW}Usage:{Style.RESET_ALL} python analyze_vecf.py <font.vecf>")
     else:
-        analyze_vecf_comprehensive(sys.argv[1])
+        analyze_tyf(sys.argv[1])

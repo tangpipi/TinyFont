@@ -204,7 +204,7 @@ def test(fonts):
 # -----------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='Char2Stroke V18 (Split Core)')
+    parser = argparse.ArgumentParser(description='TinyFont Toolchain')
     subparsers = parser.add_subparsers(dest='command')
 
     p_build = subparsers.add_parser('build')
@@ -245,7 +245,7 @@ if __name__ == "__main__":
         if os.path.exists("analyze.py"):
             try:
                 import analyze
-                analyze.analyze_tyf(BuildParams.output)
+                analyze.analyze_tyf(BuildParams.output + ".tyf")
             except Exception as e:
                 print(f"[Analyzer] Failed to run analyze.py: {e}")
         
